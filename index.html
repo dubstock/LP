@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sheet Driven Gallery</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      background: #fafafa;
+      color: #222;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #fff;
+      border-bottom: 1px solid #ddd;
+    }
+    .header-inner { padding: 10px 12px 6px; }
+    .app-title { font-size: 20px; font-weight: 700; }
+
+    .tabs {
+      display: flex;
+      overflow-x: auto;
+      white-space: nowrap;
+      padding: 4px 8px 8px;
+      gap: 8px;
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      flex: 0 0 auto;
+      padding: 6px 14px;
+      border-radius: 999px;
+      border: 1px solid #ddd;
+      background: #f5f5f5;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #111;
+      color: #fff;
+      border-color: #111;
+    }
+
+    .page { padding: 8px; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ===== ギャラリーグリッド（サイズ対応版） ===== */
+    /* ========== グリッド ========== */
+    .grid {
+      display: grid;
+      gap: 2px;
+      grid-auto-flow: dense;
+      grid-template-columns: repeat(3, 1fr); /* スマホは2列 */
+    }
+
+    /* タブレット以上: 3列 */
+    @media (min-width: 640px) {
+      .grid {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+
+    /* PC以上: 4列 */
+    @media (min-width: 1024px) {
+      .grid {
+        grid-template-columns: repeat(5, 1fr);
+      }
+    }
+
+    /* ========== サイズ指定（aspect-ratio方式） ========== */
+
+    /* 1×1（正方形） */
+    .grid-item.square,
+    .grid-item:not(.tall):not(.wide):not(.big) {
+      aspect-ratio: 1 / 1;
+    }
+
+    /* 1×2（縦長） */
+    .grid-item.tall {
+      grid-row: span 2;
+      aspect-ratio: 1 / 2;
+    }
+
+    /* 2×1（横長） */
+    .grid-item.wide {
+      grid-column: span 2;
+      aspect-ratio: 2 / 1;
+    }
+
+    /* 2×2（大きい） */
+    .grid-item.big {
+      grid-column: span 2;
+      grid-row: span 2;
+      aspect-ratio: 2 / 2;
+    }
+
+    /* ========== 共通アイテム ========== */
+    .grid-item {
+      position: relative;
+      overflow: hidden;
+      background: #eee;
+      cursor: pointer;
+    }
+
+    /* 中の画像 */
+    .grid-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+
+    /* ===== モーダル ===== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-overlay.show { display: flex; }
+
+    .modal {
+      background: #000;
+      color: #fff;
+      width: 100%;
+      max-width: 480px;
+      height: 100%;
+      max-height: 820px;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+    }
+    .modal-title { font-size: 16px; font-weight: 600; }
+    .modal-close {
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 22px;
+      cursor: pointer;
+    }
+    .modal-body {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      flex: 1;
+      background: #000;
+    }
+    .modal-image-wrap img { width: 100%; display: block; }
+    .modal-info {
+      padding: 10px 12px 16px;
+      background: #111;
+    }
+    .modal-meta {
+      font-size: 12px;
+      color: #aaa;
+      margin-bottom: 8px;
+    }
+    .modal-description {
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="header-inner">
+    <div class="app-title">Sheet Driven Gallery</div>
+  </div>
+  <nav class="tabs" id="tabs"></nav>
+</header>
+
+<main class="page" id="panels"></main>
+<footer class="footer">
+  <div>© 2025 問い合わせ / URLdiv>
+</footer>
+
+
+<!-- 詳細ビュー -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle"></div>
+      <button class="modal-close" id="modalClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-image-wrap">
+        <img src="" alt="" id="modalImage">
+      </div>
+      <div class="modal-info">
+        <div class="modal-meta" id="modalMeta"></div>
+        <div class="modal-description" id="modalDesc"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // シートをTSVで公開したURL
+  const SHEET_TSV_URL =
+    "https://docs.google.com/spreadsheets/d/1rsHbHWmQDDoXfOwxllHl7YFvAkZeojIBLyzEISx7psQ/export?format=tsv&gid=651098947";
+
+  // グローバル参照用
+  let globalTabs = [];
+  let currentTabIndex = 0;
+
+  async function init() {
+    // キャッシュされないようにクエリをつける
+    const url = SHEET_TSV_URL + "&t=" + Date.now();
+    const res = await fetch(url, { cache: "no-cache" });
+    const text = await res.text();
+
+    const rows = text
+      .trim()
+      .split(/\r?\n/)
+      .map(r => r.split("\t").map(c => c.trim()));
+
+    const header = rows.shift();
+    const idx = {};
+    header.forEach((name, i) => {
+      idx[name.trim()] = i;
+    });
+
+    const tabsMap = {};
+
+    rows.forEach(r => {
+      const tabId    = r[idx["tabId"]];
+      const tabLabel = r[idx["tabLabel"]];
+      const title    = r[idx["title"]];
+      const meta     = r[idx["meta"]];
+      const desc     = r[idx["description"]];
+      const imageFn  = r[idx["imageUrl"]];
+      const size     = (r[idx["size"]] || "").trim();
+      const status   = (r[idx["status"]] || "").trim();
+
+      if (status !== "公開" || !tabId) return;
+
+      if (!tabsMap[tabId]) {
+        tabsMap[tabId] = { id: tabId, label: tabLabel, items: [] };
+      }
+
+      tabsMap[tabId].items.push({
+        title,
+        meta,
+        description: desc,
+        image: imageFn ? ("./images/" + imageFn) : "",
+        size: size || "square"   // デフォルトは square
+      });
+    });
+
+    globalTabs = Object.values(tabsMap);
+    buildUI(globalTabs);
+    setupModal();
+    setupSwipe();   // ← スワイプ設定
+  }
+
+  // タブ切り替えを1か所に集約
+  function activateTab(index) {
+    const tabButtons = document.querySelectorAll(".tab-btn");
+    const tabPanels  = document.querySelectorAll(".tab-panel");
+    if (!tabButtons.length || !tabPanels.length) return;
+    if (index < 0 || index >= tabButtons.length) return;
+
+    currentTabIndex = index;
+
+    tabButtons.forEach((btn, i) => {
+      btn.classList.toggle("active", i === index);
+    });
+    tabPanels.forEach((panel, i) => {
+      panel.classList.toggle("active", i === index);
+    });
+
+    // タブバーをスクロールして選択タブを見える位置に
+    const activeBtn = tabButtons[index];
+    const tabsEl = document.getElementById("tabs");
+    if (activeBtn && tabsEl) {
+      const btnRect = activeBtn.getBoundingClientRect();
+      const tabsRect = tabsEl.getBoundingClientRect();
+      const offset = btnRect.left - tabsRect.left - (tabsRect.width / 2) + (btnRect.width / 2);
+      tabsEl.scrollLeft += offset;
+    }
+  }
+
+  function buildUI(tabs) {
+    const tabsEl   = document.getElementById("tabs");
+    const panelsEl = document.getElementById("panels");
+    tabsEl.innerHTML = "";
+    panelsEl.innerHTML = "";
+
+    tabs.forEach((tab, index) => {
+      // タブボタン
+      const btn = document.createElement("button");
+      btn.className = "tab-btn" + (index === 0 ? " active" : "");
+      btn.dataset.tab = tab.id;
+      btn.dataset.index = index;
+      btn.textContent = tab.label || tab.id;
+      tabsEl.appendChild(btn);
+
+      // パネル
+      const section = document.createElement("section");
+      section.className = "tab-panel" + (index === 0 ? " active" : "");
+      section.id = tab.id;
+      section.dataset.index = index;
+
+      const grid = document.createElement("div");
+      grid.className = "grid";
+
+      tab.items.forEach(item => {
+        const cell = document.createElement("div");
+
+        // sizeに応じてクラスを付ける
+        let baseClass = "grid-item";
+        if (item.size === "tall") {
+          baseClass += " tall";
+        } else if (item.size === "wide") {
+          baseClass += " wide";
+        } else if (item.size === "big") {
+          baseClass += " big";
+        } else {
+          baseClass += " square";
+        }
+        cell.className = baseClass;
+
+        cell.dataset.title = item.title;
+        cell.dataset.meta = item.meta;
+        cell.dataset.description = item.description;
+
+        if (item.image) {
+          const img = document.createElement("img");
+          img.src = item.image;
+          img.alt = item.title || "";
+          cell.appendChild(img);
+        }
+
+        grid.appendChild(cell);
+      });
+
+      section.appendChild(grid);
+      panelsEl.appendChild(section);
+    });
+
+    // タブボタンのクリック
+    const tabButtons = document.querySelectorAll(".tab-btn");
+    tabButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.index || 0);
+        activateTab(idx);
+      });
+    });
+
+    currentTabIndex = 0;
+  }
+
+  function setupModal() {
+    const modalOverlay = document.getElementById("modalOverlay");
+    const modalImage   = document.getElementById("modalImage");
+    const modalTitle   = document.getElementById("modalTitle");
+    const modalMeta    = document.getElementById("modalMeta");
+    const modalDesc    = document.getElementById("modalDesc");
+    const modalClose   = document.getElementById("modalClose");
+
+    document.body.addEventListener("click", (e) => {
+      const item = e.target.closest(".grid-item");
+      if (!item) return;
+
+      const img = item.querySelector("img");
+      if (img) {
+        modalImage.src = img.src;
+      } else {
+        modalImage.src = "";
+      }
+      modalTitle.textContent = item.dataset.title || "";
+      modalMeta.textContent  = item.dataset.meta || "";
+      modalDesc.textContent  = item.dataset.description || "";
+      modalOverlay.classList.add("show");
+    });
+
+    modalClose.addEventListener("click", () => {
+      modalOverlay.classList.remove("show");
+    });
+    modalOverlay.addEventListener("click", (e) => {
+      if (e.target === modalOverlay) {
+        modalOverlay.classList.remove("show");
+      }
+    });
+  }
+
+  // スワイプでタブ切り替え
+  function setupSwipe() {
+    const panels = document.getElementById("panels");
+    if (!panels) return;
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchEndX = 0;
+    let touchEndY = 0;
+    const SWIPE_THRESHOLD = 50; // px
+
+    panels.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+      touchEndX = touchStartX;
+      touchEndY = touchStartY;
+    });
+
+    panels.addEventListener("touchmove", (e) => {
+      const t = e.touches[0];
+      touchEndX = t.clientX;
+      touchEndY = t.clientY;
+    });
+
+    panels.addEventListener("touchend", () => {
+      const dx = touchEndX - touchStartX;
+      const dy = touchEndY - touchStartY;
+
+      // 縦スクロールのつもりのときは無視
+      if (Math.abs(dy) > Math.abs(dx)) return;
+
+      if (Math.abs(dx) < SWIPE_THRESHOLD) return;
+
+      if (dx < 0) {
+        // 左スワイプ → 次のタブへ
+        const next = currentTabIndex + 1;
+        if (next < globalTabs.length) {
+          activateTab(next);
+        }
+      } else {
+        // 右スワイプ → 前のタブへ
+        const prev = currentTabIndex - 1;
+        if (prev >= 0) {
+          activateTab(prev);
+        }
+      }
+    });
+  }
+
+  init();
+</script>
+
+</body>
+</html>

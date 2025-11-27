@@ -476,7 +476,7 @@
   let currentImages = [];
   let currentImageIndex = 0;
 
-  // === 1) シート読み込み：imageCount を読む、HEADは使わない ===
+  // === 1) シート読み込み（imageCount はあれば上限として使う） ===
   async function init() {
     const url = SHEET_TSV_URL + "&t=" + Date.now();
     const res = await fetch(url, { cache: "no-cache" });
@@ -504,10 +504,12 @@
       const size     = (r[idx["size"]] || "").trim();
       const status   = (r[idx["status"]] || "").trim();
 
-      // ★ 追加：imageCount 列（なければ 1）
-      const imageCount = idx["imageCount"] != null
-        ? Number(r[idx["imageCount"]] || "1")
-        : 1;
+      // imageCount 列（あれば上限として使う）
+      let imageMax = 0;
+      if (idx["imageCount"] != null) {
+        const v = Number(r[idx["imageCount"]] || "");
+        if (!Number.isNaN(v) && v > 0) imageMax = v;
+      }
 
       if (status !== "公開" || !tabId) return;
 
@@ -520,7 +522,7 @@
         meta,
         description: desc,
         size: size || "square",
-        imageCount: isNaN(imageCount) ? 1 : imageCount
+        imageMax
       });
     });
 
@@ -539,7 +541,7 @@
     setupMobileBandHover();
   }
 
-  // タブ切り替え
+  // === 2) タブ切り替え ===
   function activateTab(index) {
     const tabButtons = document.querySelectorAll(".tab-btn");
     const tabPanels  = document.querySelectorAll(".tab-panel");
@@ -560,7 +562,8 @@
     if (activeBtn && tabsEl) {
       const btnRect = activeBtn.getBoundingClientRect();
       const tabsRect = tabsEl.getBoundingClientRect();
-      const offset = btnRect.left - tabsRect.left - (tabsRect.width / 2) + (btnRect.width / 2);
+      const offset =
+        btnRect.left - tabsRect.left - (tabsRect.width / 2) + (btnRect.width / 2);
       tabsEl.scrollLeft += offset;
     }
 
@@ -569,7 +572,7 @@
     }
   }
 
-  // === 2) グリッド構築：サムネは meta-01.jpg だけ、lazy でブラウザ任せ ===
+  // === 3) グリッド構築：サムネは meta-01.jpg だけ、lazy ロード ===
   function buildUI(tabs) {
     const tabsEl   = document.getElementById("tabs");
     const panelsEl = document.getElementById("panels");
@@ -610,14 +613,14 @@
         cell.dataset.title       = item.title;
         cell.dataset.meta        = item.meta;
         cell.dataset.description = item.description;
-        cell.dataset.imageCount  = String(item.imageCount || 1);
+        cell.dataset.imageMax    = String(item.imageMax || 0);
 
         const thumbUrl = item.meta ? `./images/${item.meta}-01.jpg` : "";
         if (thumbUrl) {
           const img = document.createElement("img");
           img.alt = item.title || "";
-          img.loading = "lazy";      // ★ lazy ロード
-          img.src = thumbUrl;        // 01.jpg だけ
+          img.loading = "lazy";   // 画面近くまで来るまで読まない
+          img.src = thumbUrl;     // 01だけ
           cell.appendChild(img);
         }
 
@@ -644,7 +647,39 @@
     currentTabIndex = 0;
   }
 
-  // === 3) モーダル：開いたときだけ imageCount を見て 02 以降を使う ===
+  // === 4) 拡大用：meta-01〜XX.jpg をその場で探す（クリックされた案件だけ） ===
+  async function collectImages(meta, thumbUrl, imageMax) {
+    const urls = [];
+
+    // 01 は確実にあるので先に入れておく
+    if (thumbUrl) urls.push(thumbUrl);
+
+    // 何枚まで見るか：imageMax が 2以上ならそれ、なければ最大 10 まで
+    const limit = imageMax && imageMax > 1 ? imageMax : 10;
+
+    const promises = [];
+    for (let i = 2; i <= limit; i++) {
+      const num = String(i).padStart(2, "0");
+      const url = `./images/${meta}-${num}.jpg`;
+
+      promises.push(
+        new Promise(resolve => {
+          const img = new Image();
+          img.onload = () => {
+            urls.push(url); // あるものだけ追加
+            resolve();
+          };
+          img.onerror = () => resolve();
+          img.src = url;
+        })
+      );
+    }
+
+    await Promise.all(promises);
+    return urls;
+  }
+
+  // === 5) モーダル処理（カルーセル + スワイプ） ===
   function setupModal() {
     const modalOverlay   = document.getElementById("modalOverlay");
     const modalImage     = document.getElementById("modalImage");
@@ -687,19 +722,22 @@
       modalDots.style.display = showNav ? "flex" : "none";
     }
 
-    // グリッドクリック → 拡大
-    document.body.addEventListener("click", (e) => {
+    // ★ グリッドクリック → 画像枚数をその場で探索してからモーダル表示
+    document.body.addEventListener("click", async (e) => {
       const cell = e.target.closest(".grid-item");
       if (!cell) return;
 
-      const meta  = cell.dataset.meta;
-      const count = Number(cell.dataset.imageCount || "1") || 1;
+      const meta     = cell.dataset.meta;
+      const imageMax = Number(cell.dataset.imageMax || "0");
+      const thumbImg = cell.querySelector("img");
+      const thumbUrl = thumbImg ? thumbImg.src : "";
 
-      // ★ imageCount を使って 01〜count までのURLを作る
-      const imgs = [];
-      for (let i = 1; i <= count; i++) {
-        const num = String(i).padStart(2, "0");
-        imgs.push(`./images/${meta}-${num}.jpg`);
+      let imgs = [];
+      if (meta) {
+        imgs = await collectImages(meta, thumbUrl, imageMax);
+      }
+      if (!imgs.length && thumbUrl) {
+        imgs = [thumbUrl];
       }
 
       currentImages = imgs;
@@ -716,13 +754,11 @@
     modalClose.addEventListener("click", () => {
       modalOverlay.classList.remove("show");
     });
-
     modalOverlay.addEventListener("click", (e) => {
       if (e.target === modalOverlay) {
         modalOverlay.classList.remove("show");
       }
     });
-
     if (modalTapClose) {
       modalTapClose.addEventListener("click", () => {
         modalOverlay.classList.remove("show");
@@ -735,7 +771,6 @@
       currentImageIndex = (currentImageIndex - 1 + currentImages.length) % currentImages.length;
       renderModalImage();
     });
-
     modalNext.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!currentImages.length) return;
@@ -743,7 +778,7 @@
       renderModalImage();
     });
 
-    // モーダル内スワイプ（横で画像切替）
+    // モーダル内画像の横スワイプで切り替え
     let startX = 0, startY = 0, endX = 0, endY = 0;
     const SWIPE_X = 40;
 
@@ -754,13 +789,11 @@
       endX = startX;
       endY = startY;
     });
-
     modalImageWrap.addEventListener("touchmove", (e) => {
       const t = e.touches[0];
       endX = t.clientX;
       endY = t.clientY;
     });
-
     modalImageWrap.addEventListener("touchend", () => {
       const dx = endX - startX;
       const dy = endY - startY;
@@ -775,7 +808,7 @@
       }
     });
 
-    // 下半分スワイプで閉じる
+    // モバイル：下半分の縦スワイプで閉じる
     if (modalBody) {
       let closeStartX = 0, closeStartY = 0, closeEndX = 0, closeEndY = 0;
       let closeActive = false;
@@ -790,13 +823,11 @@
         const vhMid = window.innerHeight / 2;
         closeActive = (closeStartY > vhMid);
       });
-
       modalBody.addEventListener("touchmove", (e) => {
         const t = e.touches[0];
         closeEndX = t.clientX;
         closeEndY = t.clientY;
       });
-
       modalBody.addEventListener("touchend", () => {
         if (!closeActive) return;
         const dx = closeEndX - closeStartX;
@@ -808,7 +839,7 @@
     }
   }
 
-  // === 4) モバイルの左右スワイプでタブ切り替え ===
+  // === 6) モバイル：左右スワイプでタブ切り替え ===
   function setupSwipe() {
     const panels = document.getElementById("panels");
     if (!panels) return;
@@ -823,13 +854,11 @@
       touchEndX = touchStartX;
       touchEndY = touchStartY;
     });
-
     panels.addEventListener("touchmove", (e) => {
       const t = e.touches[0];
       touchEndX = t.clientX;
       touchEndY = t.clientY;
     });
-
     panels.addEventListener("touchend", () => {
       const dx = touchEndX - touchStartX;
       const dy = touchEndY - touchStartY;
@@ -846,12 +875,14 @@
     });
   }
 
-  // === 5) モバイルの「真ん中帯でタイトル表示」 ===
+  // === 7) モバイル中央帯ホバー（タイトル表示） ===
   function setupMobileBandHover() {
     const band = document.getElementById("mobileFocusBand");
     if (!band) return;
 
-    const isTouchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    const isTouchDevice = window.matchMedia(
+      "(hover: none) and (pointer: coarse)"
+    ).matches;
     if (!isTouchDevice) return;
 
     const update = () => {
@@ -864,7 +895,8 @@
       const bandTop    = bandRect.top;
       const bandBottom = bandRect.bottom;
 
-      document.querySelectorAll(".grid-item.label-visible")
+      document
+        .querySelectorAll(".grid-item.label-visible")
         .forEach(el => el.classList.remove("label-visible"));
 
       items.forEach(item => {
@@ -885,6 +917,8 @@
 </script>
 
 
+
 </body>
 </html>
+
 

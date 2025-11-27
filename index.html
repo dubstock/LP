@@ -465,58 +465,18 @@
 </div>
 
 <script>
-  // 拡張子自動判定（baseName = "101-1-01" など）
-  async function resolveImagePath(baseName) {
-    if (!baseName) return "";
-
-     // すでに .jpg / .jpeg が付いているなら、そのまま使う（存在チェックもしない）
-      if (/\.(jpg|jpeg)$/i.test(baseName)) {
-        return "./images/" + baseName;
-      }
-
-      // 拡張子なし → .jpg だけ試す
-      const full = `./images/${baseName}.jpg`;
-      try {
-        const res = await fetch(full, { method: "HEAD" });
-        if (res.ok) return full;
-      } catch (e) {}
-
-      return "";
-      }
-
-  // Meta（案件番号）から「番号-01, -02...」形式で画像を全部読む
-  async function loadImagesByMeta(meta) {
-    if (!meta) return [];
-
-    const results = [];
-    const maxImages = 5;
-
-    for (let i = 1; i <= maxImages; i++) {
-      const num = String(i).padStart(2, "0"); // 01, 02...
-      const base = `${meta}-${num}`;          // 例: 101-1-01
-      const url = await resolveImagePath(base);
-      if (!url) {
-        // 1枚目が無い → 画像無し
-        if (i === 1) return [];
-        // 途中で途切れた → そこで終了
-        break;
-      }
-      results.push(url);
-    }
-
-    return results;
-  }
-
+  // ▼ スプレッドシートTSV
   const SHEET_TSV_URL =
     "https://docs.google.com/spreadsheets/d/1rsHbHWmQDDoXfOwxllHl7YFvAkZeojIBLyzEISx7psQ/export?format=tsv&gid=651098947";
 
   let globalTabs = [];
   let currentTabIndex = 0;
 
-  // モーダル用：複数画像
+  // モーダル用
   let currentImages = [];
   let currentImageIndex = 0;
 
+  // === 1) シート読み込み：imageCount を読む、HEADは使わない ===
   async function init() {
     const url = SHEET_TSV_URL + "&t=" + Date.now();
     const res = await fetch(url, { cache: "no-cache" });
@@ -535,20 +495,21 @@
 
     const tabsMap = {};
 
-    // for...of で await を安全に使う
-    for (const r of rows) {
+    rows.forEach(r => {
       const tabId    = r[idx["tabId"]];
       const tabLabel = r[idx["tabLabel"]];
       const title    = r[idx["title"]];
-      const meta     = r[idx["meta"]];           // 案件番号として使用
+      const meta     = r[idx["meta"]];
       const desc     = r[idx["description"]];
       const size     = (r[idx["size"]] || "").trim();
       const status   = (r[idx["status"]] || "").trim();
 
-      if (status !== "公開" || !tabId) continue;
+      // ★ 追加：imageCount 列（なければ 1）
+      const imageCount = idx["imageCount"] != null
+        ? Number(r[idx["imageCount"]] || "1")
+        : 1;
 
-      // Meta（案件番号）から画像を全部ロード
-      const imageUrls = await loadImagesByMeta(meta);
+      if (status !== "公開" || !tabId) return;
 
       if (!tabsMap[tabId]) {
         tabsMap[tabId] = { id: tabId, label: tabLabel, items: [] };
@@ -558,14 +519,14 @@
         title,
         meta,
         description: desc,
-        images: imageUrls,
-        size: size || "square"
+        size: size || "square",
+        imageCount: isNaN(imageCount) ? 1 : imageCount
       });
-    }
+    });
 
     const tabArray = Object.values(tabsMap);
 
-    // おすすめタブ = 全部ミックス
+    // おすすめタブ = 全カテゴリのミックス
     const allItems = tabArray.flatMap(t => t.items);
     globalTabs = [
       { id: "recommend", label: "おすすめ", items: allItems },
@@ -578,6 +539,7 @@
     setupMobileBandHover();
   }
 
+  // タブ切り替え
   function activateTab(index) {
     const tabButtons = document.querySelectorAll(".tab-btn");
     const tabPanels  = document.querySelectorAll(".tab-panel");
@@ -601,13 +563,13 @@
       const offset = btnRect.left - tabsRect.left - (tabsRect.width / 2) + (btnRect.width / 2);
       tabsEl.scrollLeft += offset;
     }
-      // モバイルの「中央帯カーソル」を更新
+
     if (typeof window.__mobileBandUpdate === "function") {
       window.__mobileBandUpdate();
     }
-
   }
 
+  // === 2) グリッド構築：サムネは meta-01.jpg だけ、lazy でブラウザ任せ ===
   function buildUI(tabs) {
     const tabsEl   = document.getElementById("tabs");
     const panelsEl = document.getElementById("panels");
@@ -645,20 +607,20 @@
         }
         cell.className = baseClass;
 
-        cell.dataset.title = item.title;
-        cell.dataset.meta = item.meta;
+        cell.dataset.title       = item.title;
+        cell.dataset.meta        = item.meta;
         cell.dataset.description = item.description;
-        cell.dataset.images = (item.images || []).join(",");
+        cell.dataset.imageCount  = String(item.imageCount || 1);
 
-        const thumb = (item.images && item.images.length > 0) ? item.images[0] : "";
-        if (thumb) {
+        const thumbUrl = item.meta ? `./images/${item.meta}-01.jpg` : "";
+        if (thumbUrl) {
           const img = document.createElement("img");
-          img.src = thumb;
           img.alt = item.title || "";
+          img.loading = "lazy";      // ★ lazy ロード
+          img.src = thumbUrl;        // 01.jpg だけ
           cell.appendChild(img);
         }
 
-        // タイトルラベル
         const label = document.createElement("div");
         label.className = "grid-label";
         label.textContent = item.title || "";
@@ -682,16 +644,17 @@
     currentTabIndex = 0;
   }
 
+  // === 3) モーダル：開いたときだけ imageCount を見て 02 以降を使う ===
   function setupModal() {
-    const modalOverlay = document.getElementById("modalOverlay");
-    const modalImage   = document.getElementById("modalImage");
-    const modalTitle   = document.getElementById("modalTitle");
-    const modalMeta    = document.getElementById("modalMeta");
-    const modalDesc    = document.getElementById("modalDesc");
-    const modalClose   = document.getElementById("modalClose");
-    const modalPrev    = document.getElementById("modalPrev");
-    const modalNext    = document.getElementById("modalNext");
-    const modalDots    = document.getElementById("modalDots");
+    const modalOverlay   = document.getElementById("modalOverlay");
+    const modalImage     = document.getElementById("modalImage");
+    const modalTitle     = document.getElementById("modalTitle");
+    const modalMeta      = document.getElementById("modalMeta");
+    const modalDesc      = document.getElementById("modalDesc");
+    const modalClose     = document.getElementById("modalClose");
+    const modalPrev      = document.getElementById("modalPrev");
+    const modalNext      = document.getElementById("modalNext");
+    const modalDots      = document.getElementById("modalDots");
     const modalImageWrap = document.getElementById("modalImageWrap");
     const modalTapClose  = document.getElementById("modalTapClose");
     const modalBody      = document.querySelector(".modal-body");
@@ -724,29 +687,27 @@
       modalDots.style.display = showNav ? "flex" : "none";
     }
 
-    // グリッドクリック → どのデバイスでも「タップ/クリック＝即拡大」
+    // グリッドクリック → 拡大
     document.body.addEventListener("click", (e) => {
-      const item = e.target.closest(".grid-item");
-      if (!item) return;
+      const cell = e.target.closest(".grid-item");
+      if (!cell) return;
 
-      const imagesStr = item.dataset.images || "";
-      const imgs = imagesStr.split(",").map(s => s.trim()).filter(Boolean);
+      const meta  = cell.dataset.meta;
+      const count = Number(cell.dataset.imageCount || "1") || 1;
 
-      if (imgs.length === 0) {
-        const thumbImg = item.querySelector("img");
-        if (thumbImg) {
-          currentImages = [thumbImg.src];
-        } else {
-          currentImages = [];
-        }
-      } else {
-        currentImages = imgs;
+      // ★ imageCount を使って 01〜count までのURLを作る
+      const imgs = [];
+      for (let i = 1; i <= count; i++) {
+        const num = String(i).padStart(2, "0");
+        imgs.push(`./images/${meta}-${num}.jpg`);
       }
+
+      currentImages = imgs;
       currentImageIndex = 0;
 
-      modalTitle.textContent = item.dataset.title || "";
-      modalMeta.textContent  = item.dataset.meta || "";
-      modalDesc.textContent  = item.dataset.description || "";
+      modalTitle.textContent = cell.dataset.title || "";
+      modalMeta.textContent  = meta || "";
+      modalDesc.textContent  = cell.dataset.description || "";
 
       renderModalImage();
       modalOverlay.classList.add("show");
@@ -762,7 +723,6 @@
       }
     });
 
-    // 下側タップで閉じる
     if (modalTapClose) {
       modalTapClose.addEventListener("click", () => {
         modalOverlay.classList.remove("show");
@@ -783,11 +743,8 @@
       renderModalImage();
     });
 
-    // 画像部分：横スワイプで画像送りのみ（縦方向では閉じない）
-    let startX = 0;
-    let startY = 0;
-    let endX = 0;
-    let endY = 0;
+    // モーダル内スワイプ（横で画像切替）
+    let startX = 0, startY = 0, endX = 0, endY = 0;
     const SWIPE_X = 40;
 
     modalImageWrap.addEventListener("touchstart", (e) => {
@@ -807,11 +764,8 @@
     modalImageWrap.addEventListener("touchend", () => {
       const dx = endX - startX;
       const dy = endY - startY;
-
-      // 横方向が優勢で一定以上動いたら画像送り
       if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > SWIPE_X) {
         if (!currentImages.length) return;
-
         if (dx < 0) {
           currentImageIndex = (currentImageIndex + 1) % currentImages.length;
         } else {
@@ -819,15 +773,11 @@
         }
         renderModalImage();
       }
-      // 縦方向のスワイプでは何もしない（ここでは閉じない）
     });
 
-    // 画面下半分での上下スワイプで閉じる（サイトリロードと競合しないように）
+    // 下半分スワイプで閉じる
     if (modalBody) {
-      let closeStartX = 0;
-      let closeStartY = 0;
-      let closeEndX = 0;
-      let closeEndY = 0;
+      let closeStartX = 0, closeStartY = 0, closeEndX = 0, closeEndY = 0;
       let closeActive = false;
       const CLOSE_SWIPE_Y = 60;
 
@@ -837,9 +787,7 @@
         closeStartY = t.clientY;
         closeEndX = closeStartX;
         closeEndY = closeStartY;
-
         const vhMid = window.innerHeight / 2;
-        // 画面の下半分から始まったスワイプだけ閉じる対象とする
         closeActive = (closeStartY > vhMid);
       });
 
@@ -851,11 +799,8 @@
 
       modalBody.addEventListener("touchend", () => {
         if (!closeActive) return;
-
         const dx = closeEndX - closeStartX;
         const dy = closeEndY - closeStartY;
-
-        // 縦方向優勢かつ一定以上の距離なら、上下どちらでも閉じる
         if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > CLOSE_SWIPE_Y) {
           modalOverlay.classList.remove("show");
         }
@@ -863,14 +808,12 @@
     }
   }
 
+  // === 4) モバイルの左右スワイプでタブ切り替え ===
   function setupSwipe() {
     const panels = document.getElementById("panels");
     if (!panels) return;
 
-    let touchStartX = 0;
-    let touchStartY = 0;
-    let touchEndX = 0;
-    let touchEndY = 0;
+    let touchStartX = 0, touchStartY = 0, touchEndX = 0, touchEndY = 0;
     const SWIPE_THRESHOLD = 50;
 
     panels.addEventListener("touchstart", (e) => {
@@ -890,81 +833,58 @@
     panels.addEventListener("touchend", () => {
       const dx = touchEndX - touchStartX;
       const dy = touchEndY - touchStartY;
-
       if (Math.abs(dy) > Math.abs(dx)) return;
       if (Math.abs(dx) < SWIPE_THRESHOLD) return;
 
       if (dx < 0) {
         const next = currentTabIndex + 1;
-        if (next < globalTabs.length) {
-          activateTab(next);
-        }
+        if (next < globalTabs.length) activateTab(next);
       } else {
         const prev = currentTabIndex - 1;
-        if (prev >= 0) {
-          activateTab(prev);
-        }
+        if (prev >= 0) activateTab(prev);
       }
     });
   }
 
-// ★ モバイル版：画面中央の帯にあるカードのタイトルを自動表示
-function setupMobileBandHover() {
-  const band = document.getElementById("mobileFocusBand");
-  if (!band) return;
+  // === 5) モバイルの「真ん中帯でタイトル表示」 ===
+  function setupMobileBandHover() {
+    const band = document.getElementById("mobileFocusBand");
+    if (!band) return;
 
-  const isTouchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
-  if (!isTouchDevice) {
-    // PCなどでは何もしない
-    return;
+    const isTouchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    if (!isTouchDevice) return;
+
+    const update = () => {
+      const activePanel = document.querySelector(".tab-panel.active");
+      if (!activePanel) return;
+      const items = Array.from(activePanel.querySelectorAll(".grid-item"));
+      if (!items.length) return;
+
+      const bandRect   = band.getBoundingClientRect();
+      const bandTop    = bandRect.top;
+      const bandBottom = bandRect.bottom;
+
+      document.querySelectorAll(".grid-item.label-visible")
+        .forEach(el => el.classList.remove("label-visible"));
+
+      items.forEach(item => {
+        const rect = item.getBoundingClientRect();
+        if (rect.bottom < 0 || rect.top > window.innerHeight) return;
+        const overlaps = !(rect.bottom <= bandTop || rect.top >= bandBottom);
+        if (overlaps) item.classList.add("label-visible");
+      });
+    };
+
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    window.__mobileBandUpdate = update;
+    setTimeout(update, 100);
   }
 
-  // 「帯に触れているカード全部」にラベルを出す処理
-  const update = () => {
-    const activePanel = document.querySelector(".tab-panel.active");
-    if (!activePanel) return;
-
-    const items = Array.from(activePanel.querySelectorAll(".grid-item"));
-    if (!items.length) return;
-
-    const bandRect   = band.getBoundingClientRect();
-    const bandTop    = bandRect.top;
-    const bandBottom = bandRect.bottom;
-
-    // いったん全部オフ
-    document.querySelectorAll(".grid-item.label-visible")
-      .forEach(el => el.classList.remove("label-visible"));
-
-    // 帯に少しでもかかっているカードは全部 ON
-    items.forEach(item => {
-      const rect = item.getBoundingClientRect();
-      // 画面外は無視
-      if (rect.bottom < 0 || rect.top > window.innerHeight) return;
-
-      // 縦方向で帯と重なっているかどうか
-      const overlaps =
-        !(rect.bottom <= bandTop || rect.top >= bandBottom);
-
-      if (overlaps) {
-        item.classList.add("label-visible");
-      }
-    });
-  };
-
-  // スクロール・リサイズ時に更新
-  window.addEventListener("scroll", update, { passive: true });
-  window.addEventListener("resize", update);
-
-  // タブ切り替え時にも呼べるようにグローバルに保持
-  window.__mobileBandUpdate = update;
-
-  // 初期表示
-  setTimeout(update, 100);
-}
-
- 
   init();
 </script>
 
+
 </body>
 </html>
+

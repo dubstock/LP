@@ -528,12 +528,20 @@
 
     const tabArray = Object.values(tabsMap);
 
-    // おすすめタブ = 全カテゴリのミックス
-    const allItems = tabArray.flatMap(t => t.items);
+    // 全カテゴリの案件をまとめる
+    let allItems = tabArray.flatMap(t => t.items);
+    
+    // Fisher–Yates shuffle（最も偏りの少ないランダム）
+    for (let i = allItems.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [allItems[i], allItems[j]] = [allItems[j], allItems[i]];
+    }
+    
     globalTabs = [
       { id: "recommend", label: "おすすめ", items: allItems },
       ...tabArray
     ];
+
 
     buildUI(globalTabs);
     setupModal();
@@ -919,3 +927,4 @@
 
 </body>
 </html>
+
